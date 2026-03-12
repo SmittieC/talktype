@@ -17,7 +17,6 @@ Examples:
 
 import argparse
 import atexit
-import fcntl
 import io
 import json
 import os
@@ -703,7 +702,7 @@ def transcribe_and_paste(audio: np.ndarray):
     except Exception as e:
         beep_error()
         set_terminal_title("TalkType ❌")
-        show_status("❌ FAILED", "F7 to retry")
+        show_status("❌ FAILED", str(e)[:50])
         # Keep pending audio for retry - don't clear it
     finally:
         with state_lock:
@@ -843,31 +842,56 @@ def create_retry_handler(retry_key):
     return on_press
 
 
+class _WindowsLock:
+    def __init__(self, handle):
+        self._handle = handle
+
+    def close(self):
+        import ctypes
+        if self._handle:
+            ctypes.windll.kernel32.CloseHandle(self._handle)
+            self._handle = None
+
+
 def acquire_instance_lock():
     """Ensure only one instance of TalkType runs at a time."""
     lock_file = Path.home() / ".cache" / "talktype" / "talktype.lock"
     lock_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Open lock file (create if doesn't exist)
-    lock_fd = open(lock_file, 'w')
-
-    try:
-        # Try to acquire exclusive lock (non-blocking)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Write our PID
-        lock_fd.write(str(os.getpid()))
-        lock_fd.flush()
-        # Keep the file open to maintain the lock
-        return lock_fd
-    except BlockingIOError:
-        # Another instance is running
+    if SYSTEM == "Windows":
+        import ctypes
+        handle = ctypes.windll.kernel32.CreateMutexW(None, True, "TalkTypeSingleInstance")
+        if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = f.read().strip()
+                print(f"TalkType is already running (PID {pid})")
+            except Exception:
+                print("TalkType is already running")
+            ctypes.windll.kernel32.CloseHandle(handle)
+            sys.exit(1)
         try:
-            with open(lock_file, 'r') as f:
-                pid = f.read().strip()
-            print(f"TalkType is already running (PID {pid})")
-        except:
-            print("TalkType is already running")
-        sys.exit(1)
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            pass
+        return _WindowsLock(handle)
+    else:
+        import fcntl
+        lock_fd = open(lock_file, 'w')
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_fd.write(str(os.getpid()))
+            lock_fd.flush()
+            return lock_fd
+        except BlockingIOError:
+            try:
+                with open(lock_file, 'r') as f:
+                    pid = f.read().strip()
+                print(f"TalkType is already running (PID {pid})")
+            except Exception:
+                print("TalkType is already running")
+            sys.exit(1)
 
 
 def main():
