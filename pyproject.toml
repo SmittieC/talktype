@@ -18,6 +18,7 @@ dependencies = [
     "rich>=13.0.0",
     "pyyaml>=6.0",
     "beaupy>=3.0.0",
+    "pyautogui>=0.9.53; sys_platform != 'linux'",
 ]
 
 [project.optional-dependencies]
